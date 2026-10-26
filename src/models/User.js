@@ -1,0 +1,40 @@
+import mongoose from 'mongoose'
+
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 100,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      maxlength: 254,
+      index: true,
+    },
+    passwordHash: {
+      type: String,
+      required: true,
+      select: false,
+    },
+    acceptedTermsAt: {
+      type: Date,
+      required: true,
+    },
+    productUpdates: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+  },
+)
+
+export const User = mongoose.model('User', userSchema)
