@@ -1,4 +1,4 @@
-import mongoose from 'mongoose'
+import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
@@ -22,19 +22,11 @@ const userSchema = new mongoose.Schema(
       required: true,
       select: false,
     },
-    acceptedTermsAt: {
-      type: Date,
-      required: true,
-    },
-    productUpdates: {
-      type: Boolean,
-      default: false,
-    },
   },
   {
     timestamps: true,
     versionKey: false,
   },
-)
+);
 
-export const User = mongoose.model('User', userSchema)
+export const User = mongoose.model("User", userSchema);
