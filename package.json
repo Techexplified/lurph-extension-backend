@@ -1,16 +1,16 @@
 {
   "name": "lurph-backend",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "Lurph authentication API using Express and MongoDB",
+  "description": "Lurph authentication API using Express, MongoDB, JWT, and Passport Google OAuth",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/routes/auth.routes.js && node --check src/controllers/auth.controller.js && node --check src/middleware/authenticate.js"
+    "check": "node --check src/server.js && node --check src/config/passport.js && node --check src/routes/auth.routes.js && node --check src/controllers/auth.controller.js && node --check src/services/googleUser.js && node --check src/models/User.js && node --check src/models/Session.js && node --check src/models/GoogleOAuthCode.js && node --check src/middleware/authenticate.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -20,6 +20,11 @@
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.19.1"
+    "mongoose": "^8.19.1",
+    "connect-mongo": "^6.0.0",
+    "express-session": "^1.18.2",
+    "mongodb": "^6.20.0",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0"
   }
 }

@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+import mongoose from 'mongoose'
 
 const userSchema = new mongoose.Schema(
   {
@@ -17,16 +17,24 @@ const userSchema = new mongoose.Schema(
       maxlength: 254,
       index: true,
     },
+    // Google-only accounts do not have a password. Email/password accounts do.
     passwordHash: {
       type: String,
-      required: true,
+      required: false,
       select: false,
+    },
+    // Stable Google account identifier from Passport's verified Google profile.
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
     },
   },
   {
     timestamps: true,
     versionKey: false,
   },
-);
+)
 
-export const User = mongoose.model("User", userSchema);
+export const User = mongoose.model('User', userSchema)
