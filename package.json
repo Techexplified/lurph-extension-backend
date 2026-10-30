@@ -3,14 +3,14 @@
   "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "Lurph authentication API using Express, MongoDB, JWT, and Passport Google OAuth",
+  "description": "Lurph authentication and chat API using Express, MongoDB, JWT, Passport Google OAuth, and OpenRouter",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/config/passport.js && node --check src/routes/auth.routes.js && node --check src/controllers/auth.controller.js && node --check src/services/googleUser.js && node --check src/models/User.js && node --check src/models/Session.js && node --check src/models/GoogleOAuthCode.js && node --check src/middleware/authenticate.js"
+    "check": "node --check src/server.js && node --check src/config/passport.js && node --check src/routes/auth.routes.js && node --check src/controllers/auth.controller.js && node --check src/services/googleUser.js && node --check src/models/User.js && node --check src/models/Session.js && node --check src/models/GoogleOAuthCode.js && node --check src/middleware/authenticate.js && node --check src/routes/chat.routes.js && node --check src/controllers/chat.controller.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

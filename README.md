@@ -47,19 +47,19 @@ Never commit `.env`, publish the Google client secret, or place Lurph JWTs in UR
 
 ## Environment variables
 
-| Variable | Purpose |
-|---|---|
-| `PORT` | Express port, default `4000` |
-| `MONGODB_URI` | MongoDB connection string |
-| `ACCESS_TOKEN_SECRET` | Signs Lurph access JWTs; 32+ characters |
-| `ACCESS_TOKEN_TTL` | Access JWT lifetime, default `15m` |
-| `REFRESH_TOKEN_TTL_DAYS` | Refresh-token lifetime, default `30` |
-| `OAUTH_SESSION_SECRET` | Signs temporary Passport OAuth state sessions; 32+ characters |
-| `CORS_ORIGINS` | Comma-separated browser origins allowed to call API endpoints |
-| `GOOGLE_CLIENT_ID` | Google Web application OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Google Web application OAuth client secret; server-side only |
-| `GOOGLE_CALLBACK_URL` | Backend callback URL registered in Google Cloud Console |
-| `GOOGLE_EXTENSION_REDIRECT_URL` | Extension's `chrome.identity.getRedirectURL()` result |
+| Variable                        | Purpose                                                       |
+| ------------------------------- | ------------------------------------------------------------- |
+| `PORT`                          | Express port, default `4000`                                  |
+| `MONGODB_URI`                   | MongoDB connection string                                     |
+| `ACCESS_TOKEN_SECRET`           | Signs Lurph access JWTs; 32+ characters                       |
+| `ACCESS_TOKEN_TTL`              | Access JWT lifetime, default `15m`                            |
+| `REFRESH_TOKEN_TTL_DAYS`        | Refresh-token lifetime, default `30`                          |
+| `OAUTH_SESSION_SECRET`          | Signs temporary Passport OAuth state sessions; 32+ characters |
+| `CORS_ORIGINS`                  | Comma-separated browser origins allowed to call API endpoints |
+| `GOOGLE_CLIENT_ID`              | Google Web application OAuth client ID                        |
+| `GOOGLE_CLIENT_SECRET`          | Google Web application OAuth client secret; server-side only  |
+| `GOOGLE_CALLBACK_URL`           | Backend callback URL registered in Google Cloud Console       |
+| `GOOGLE_EXTENSION_REDIRECT_URL` | Extension's `chrome.identity.getRedirectURL()` result         |
 
 ## Test the backend
 
@@ -96,3 +96,44 @@ The existing registration, login, refresh, current-user, and logout routes remai
 - The one-time exchange code is stored only as a SHA-256 hash and is atomically consumed.
 - Email/password routes continue to issue the same Lurph access/refresh token shape.
 - Frontend OAuth wiring is deliberately not included in this backend change.
+
+## Deploying on Vercel
+
+- Set the Vercel project's **Root Directory** to the backend directory that contains this `package.json` (if the repository also contains the frontend).
+- Keep `src/server.js` as the backend entry point. It exports the initialized Express app as the module's default export; Vercel manages the HTTP listener.
+- Add all required environment variables in Vercel Project Settings → Environment Variables, including `MONGODB_URI`, `ACCESS_TOKEN_SECRET`, `OAUTH_SESSION_SECRET`, `CORS_ORIGINS`, and the Google OAuth variables.
+- For `CORS_ORIGINS`, include the exact `chrome-extension://YOUR_EXTENSION_ID` origin. `host_permissions` in the extension manifest permits network access from the extension but does not replace the backend's CORS allow-list.
+- Redeploy after updating the code and environment variables. Verify `https://YOUR_BACKEND.vercel.app/api/health` returns `{ "status": "ok", "database": "connected" }`.
+
+## OpenRouter chat API
+
+The chat endpoint is authenticated with the same Lurph access JWT used by `/api/auth/me`:
+
+- `POST /api/chat/completions`
+- Header: `Authorization: Bearer <LURPH_ACCESS_TOKEN>`
+- JSON body:
+
+```json
+{
+  "model": "gpt-4o",
+  "messages": [
+    { "role": "user", "content": "Summarize this page in five bullet points." }
+  ],
+  "pageContext": {
+    "title": "Example page",
+    "url": "https://example.com",
+    "text": "Text extracted from the active tab"
+  },
+  "webSearchEnabled": false
+}
+```
+
+The supported `model` keys are `gpt-4o`, `claude-sonnet`, `gemini-flash`, `llama-3.3`, and `deepseek-v3`. The backend maps these keys to OpenRouter model IDs using the `OPENROUTER_MODEL_*` environment variables. Do not send an arbitrary provider model ID from the extension; the server enforces this allow-list.
+
+Set `OPENROUTER_API_KEY` in your local `.env` file and in Vercel Project Settings → Environment Variables. Keep the key on the backend only; never place it in a `VITE_*` variable or Chrome extension source. The route calls OpenRouter's `POST https://openrouter.ai/api/v1/chat/completions` endpoint and returns `{ reply, model, providerModel, usage }`.
+
+The current-page text is extracted in the extension with `chrome.scripting.executeScript` and sent only when the user submits a prompt. The backend truncates page text to 16,000 characters and text attachments to 20,000 characters. Page and attachment text are treated as untrusted reference material by the Lurph system prompt. Only TXT, MD, CSV, and JSON attachments are supported in this initial integration.
+
+When `webSearchEnabled` is true, the backend enables OpenRouter's `openrouter:web_search` server tool. This may add web-search charges to the OpenRouter request. Conversation messages are kept in the frontend's in-memory state only; this integration does not save chat history in MongoDB.
+
+The route requires a valid Lurph JWT and is rate-limited to 20 requests per minute per client IP. The Express JSON body limit is 512 KB to allow bounded page context.

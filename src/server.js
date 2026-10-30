@@ -8,6 +8,7 @@ import helmet from "helmet";
 import mongoose from "mongoose";
 import { connectDatabase } from "./config/db.js";
 import authRoutes from "./routes/auth.routes.js";
+import chatRoutes from "./routes/chat.routes.js";
 import { errorHandler, notFound } from "./middleware/errorHandler.js";
 
 const app = express();
@@ -66,7 +67,7 @@ app.use(
     maxAge: 86400,
   }),
 );
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: "512kb" }));
 
 app.get("/", (_req, res) => {
   return res.status(200).json({ message: "Lurph backend server is running." });
@@ -113,6 +114,7 @@ async function initializeApp() {
   app.use(passport.initialize());
   configureGooglePassport();
   app.use("/api/auth", authRoutes);
+  app.use("/api/chat", chatRoutes);
   app.use(notFound);
   app.use(errorHandler);
 }
