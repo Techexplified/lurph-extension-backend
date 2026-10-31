@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/config/passport.js && node --check src/routes/auth.routes.js && node --check src/controllers/auth.controller.js && node --check src/services/googleUser.js && node --check src/models/User.js && node --check src/models/Session.js && node --check src/models/GoogleOAuthCode.js && node --check src/middleware/authenticate.js && node --check src/routes/chat.routes.js && node --check src/controllers/chat.controller.js"
+    "check": "node --check src/server.js && node --check src/config/passport.js && node --check src/routes/auth.routes.js && node --check src/controllers/auth.controller.js && node --check src/services/googleUser.js && node --check src/models/User.js && node --check src/models/Session.js && node --check src/models/GoogleOAuthCode.js && node --check src/models/Conversation.js && node --check src/models/ChatMessage.js && node --check src/middleware/authenticate.js && node --check src/routes/chat.routes.js && node --check src/controllers/chat.controller.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

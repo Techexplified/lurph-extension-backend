@@ -130,10 +130,30 @@ The chat endpoint is authenticated with the same Lurph access JWT used by `/api/
 
 The supported `model` keys are `gpt-4o`, `claude-sonnet`, `gemini-flash`, `llama-3.3`, and `deepseek-v3`. The backend maps these keys to OpenRouter model IDs using the `OPENROUTER_MODEL_*` environment variables. Do not send an arbitrary provider model ID from the extension; the server enforces this allow-list.
 
-Set `OPENROUTER_API_KEY` in your local `.env` file and in Vercel Project Settings → Environment Variables. Keep the key on the backend only; never place it in a `VITE_*` variable or Chrome extension source. The route calls OpenRouter's `POST https://openrouter.ai/api/v1/chat/completions` endpoint and returns `{ reply, model, providerModel, usage }`.
+Set `OPENROUTER_API_KEY` in your local `.env` file and in Vercel Project Settings → Environment Variables. Keep the key on the backend only; never place it in a `VITE_*` variable or Chrome extension source. The route calls OpenRouter's `POST https://openrouter.ai/api/v1/chat/completions` endpoint and returns `{ reply, model, providerModel, usage, conversationId, historySaved }`.
 
 The current-page text is extracted in the extension with `chrome.scripting.executeScript` and sent only when the user submits a prompt. The backend truncates page text to 16,000 characters and text attachments to 20,000 characters. Page and attachment text are treated as untrusted reference material by the Lurph system prompt. Only TXT, MD, CSV, and JSON attachments are supported in this initial integration.
 
-When `webSearchEnabled` is true, the backend enables OpenRouter's `openrouter:web_search` server tool. This may add web-search charges to the OpenRouter request. Conversation messages are kept in the frontend's in-memory state only; this integration does not save chat history in MongoDB.
+When `webSearchEnabled` is true, the backend enables OpenRouter's `openrouter:web_search` server tool. This may add web-search charges to the OpenRouter request. Conversation messages are automatically saved in MongoDB after a successful model response. The API returns the conversation ID so the frontend can continue the same chat or restore it later from History.
 
 The route requires a valid Lurph JWT and is rate-limited to 20 requests per minute per client IP. The Express JSON body limit is 512 KB to allow bounded page context.
+
+## Chat history
+
+Chat conversations are stored in MongoDB and scoped to the authenticated user. User and assistant messages are stored in a separate `ChatMessage` collection, while the `Conversation` collection stores the title, latest prompt preview, model, page context, and last activity time.
+
+### Chat and conversation routes
+
+All routes below require `Authorization: Bearer <accessToken>`.
+
+| Method | Route                         | Purpose                                                                                   |
+| ------ | ----------------------------- | ----------------------------------------------------------------------------------------- |
+| POST   | `/api/chat/completions`       | Generate an OpenRouter response and automatically persist the user/assistant message pair |
+| GET    | `/api/chat/conversations`     | List the current user's conversations; accepts optional `?search=`                        |
+| GET    | `/api/chat/conversations/:id` | Load a conversation and its messages                                                      |
+| PATCH  | `/api/chat/conversations/:id` | Rename a conversation with `{ "title": "New title" }`                                     |
+| DELETE | `/api/chat/conversations/:id` | Delete a conversation and its messages                                                    |
+
+To continue an existing conversation, include its ID in the chat completion body as `conversationId`. Omit it or send `null` to start a new conversation. The first prompt is used as the initial title (trimmed to 58 characters); users can rename it later. Search matches conversation titles, latest prompts, and message content.
+
+Conversation records and message records are always queried using the authenticated user's ID. A user cannot read, rename, or delete another user's conversations by guessing an ID.
