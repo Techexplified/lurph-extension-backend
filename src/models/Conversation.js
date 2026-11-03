@@ -1,10 +1,10 @@
-import mongoose from 'mongoose'
+import mongoose from "mongoose";
 
 const conversationSchema = new mongoose.Schema(
   {
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
       index: true,
     },
@@ -13,13 +13,13 @@ const conversationSchema = new mongoose.Schema(
       required: true,
       trim: true,
       maxlength: 120,
-      default: 'New chat',
+      default: "New chat",
     },
     lastPromptPreview: {
       type: String,
       trim: true,
       maxlength: 300,
-      default: '',
+      default: "",
     },
     lastMessageAt: {
       type: Date,
@@ -28,28 +28,33 @@ const conversationSchema = new mongoose.Schema(
     },
     lastModel: {
       type: String,
-      default: 'gpt-4o',
+      default: "gpt-4o",
     },
     pageTitle: {
       type: String,
       trim: true,
       maxlength: 300,
-      default: '',
+      default: "",
     },
     pageUrl: {
       type: String,
       trim: true,
       maxlength: 2000,
-      default: '',
+      default: "",
+    },
+    selectedText: {
+      type: String,
+      maxlength: 12000,
+      default: "",
     },
   },
   {
     timestamps: true,
     versionKey: false,
   },
-)
+);
 
-conversationSchema.index({ user: 1, lastMessageAt: -1 })
-conversationSchema.index({ user: 1, title: 1 })
+conversationSchema.index({ user: 1, lastMessageAt: -1 });
+conversationSchema.index({ user: 1, title: 1 });
 
-export const Conversation = mongoose.model('Conversation', conversationSchema)
+export const Conversation = mongoose.model("Conversation", conversationSchema);

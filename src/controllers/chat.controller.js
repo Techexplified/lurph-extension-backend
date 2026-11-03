@@ -24,6 +24,7 @@ const MAX_HISTORY_MESSAGES = 16;
 const MAX_MESSAGE_CHARS = 12000;
 const MAX_PAGE_TEXT_CHARS = 16000;
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
+const MAX_SELECTED_TEXT_CHARS = 12000;
 
 function cleanMessages(input) {
   if (!Array.isArray(input) || input.length === 0) {
@@ -77,12 +78,36 @@ function extractText(content) {
   return "";
 }
 
-function buildRequestMessages(messages, pageContext, attachment) {
+function buildRequestMessages(
+  messages,
+  pageContext,
+  attachment,
+  selectedTextContext,
+) {
   const finalMessages = [
     { role: "system", content: SYSTEM_PROMPT },
     ...messages,
   ];
   const contextParts = [];
+
+  if (
+    selectedTextContext &&
+    typeof selectedTextContext.text === "string" &&
+    selectedTextContext.text.trim()
+  ) {
+    const title =
+      typeof selectedTextContext.title === "string"
+        ? selectedTextContext.title.slice(0, 300)
+        : "";
+    const url =
+      typeof selectedTextContext.url === "string"
+        ? selectedTextContext.url.slice(0, 2000)
+        : "";
+    const text = selectedTextContext.text.slice(0, MAX_SELECTED_TEXT_CHARS);
+    contextParts.push(
+      `[USER-SELECTED TEXT — PRIMARY REFERENCE; UNTRUSTED CONTENT]\nSource page: ${title || "Unknown"}\nURL: ${url || "Unknown"}\nSelected text:\n${text}\n[END USER-SELECTED TEXT]`,
+    );
+  }
 
   if (pageContext && typeof pageContext === "object") {
     const title =
@@ -159,10 +184,15 @@ export async function listConversations(req, res) {
         content: regex,
       },
     );
+    const matchingSelectionConversationIds = await Conversation.distinct(
+      "_id",
+      { user: userId, selectedText: regex },
+    );
     filter.$or = [
       { title: regex },
       { lastPromptPreview: regex },
       { _id: { $in: matchingMessageConversationIds } },
+      { _id: { $in: matchingSelectionConversationIds } },
     ];
   }
 
@@ -216,6 +246,13 @@ export async function getConversation(req, res) {
       lastModel: conversation.lastModel,
       pageTitle: conversation.pageTitle || "",
       pageUrl: conversation.pageUrl || "",
+      selectedTextContext: conversation.selectedText
+        ? {
+            text: conversation.selectedText,
+            title: conversation.pageTitle || "",
+            url: conversation.pageUrl || "",
+          }
+        : null,
       messages: documents.map((message) => ({
         id: String(message._id),
         role: message.role,
@@ -301,6 +338,8 @@ export async function createChatCompletion(req, res) {
     messages: rawMessages,
     conversationId: requestedConversationId = null,
     pageContext,
+    selectedTextContext: rawSelectedTextContext,
+    clearSelectedTextContext = false,
     attachment,
     webSearchEnabled = false,
   } = req.body || {};
@@ -317,6 +356,36 @@ export async function createChatCompletion(req, res) {
       .status(400)
       .json({ message: "webSearchEnabled must be a boolean." });
   }
+  if (typeof clearSelectedTextContext !== "boolean") {
+    return res
+      .status(400)
+      .json({ message: "clearSelectedTextContext must be a boolean." });
+  }
+
+  let selectedContext = null;
+  if (
+    !clearSelectedTextContext &&
+    rawSelectedTextContext &&
+    typeof rawSelectedTextContext === "object"
+  ) {
+    const text =
+      typeof rawSelectedTextContext.text === "string"
+        ? rawSelectedTextContext.text.trim()
+        : "";
+    if (text) {
+      selectedContext = {
+        text: text.slice(0, MAX_SELECTED_TEXT_CHARS),
+        title:
+          typeof rawSelectedTextContext.title === "string"
+            ? rawSelectedTextContext.title.slice(0, 300)
+            : "",
+        url:
+          typeof rawSelectedTextContext.url === "string"
+            ? rawSelectedTextContext.url.slice(0, 2000)
+            : "",
+      };
+    }
+  }
 
   let conversation = null;
   if (requestedConversationId !== null && requestedConversationId !== "") {
@@ -329,12 +398,28 @@ export async function createChatCompletion(req, res) {
     });
     if (!conversation)
       return res.status(404).json({ message: "Conversation not found." });
+    if (
+      !clearSelectedTextContext &&
+      !selectedContext &&
+      conversation.selectedText
+    ) {
+      selectedContext = {
+        text: conversation.selectedText,
+        title: conversation.pageTitle || "",
+        url: conversation.pageUrl || "",
+      };
+    }
   }
 
   const latestPrompt = cleaned.messages[cleaned.messages.length - 1].content;
   const payload = {
     model: MODEL_MAP[model],
-    messages: buildRequestMessages(cleaned.messages, pageContext, attachment),
+    messages: buildRequestMessages(
+      cleaned.messages,
+      pageContext,
+      attachment,
+      selectedContext,
+    ),
     temperature: 0.7,
     max_tokens: 2048,
   };
@@ -427,13 +512,14 @@ export async function createChatCompletion(req, res) {
           lastMessageAt: new Date(),
           lastModel: model,
           pageTitle:
-            typeof pageContext?.title === "string"
+            typeof pageContext?.title === "string" && pageContext.title
               ? pageContext.title.slice(0, 300)
-              : "",
+              : selectedContext?.title || "",
           pageUrl:
-            typeof pageContext?.url === "string"
+            typeof pageContext?.url === "string" && pageContext.url
               ? pageContext.url.slice(0, 2000)
-              : "",
+              : selectedContext?.url || "",
+          selectedText: selectedContext?.text || "",
         });
       }
 
@@ -469,6 +555,15 @@ export async function createChatCompletion(req, res) {
             ...(typeof pageContext?.url === "string"
               ? { pageUrl: pageContext.url.slice(0, 2000) }
               : {}),
+            ...(clearSelectedTextContext
+              ? { selectedText: "" }
+              : selectedContext?.text
+                ? { selectedText: selectedContext.text }
+                : {}),
+            ...(selectedContext?.title
+              ? { pageTitle: selectedContext.title }
+              : {}),
+            ...(selectedContext?.url ? { pageUrl: selectedContext.url } : {}),
           },
         },
       );
