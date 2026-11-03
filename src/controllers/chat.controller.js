@@ -25,6 +25,7 @@ const MAX_MESSAGE_CHARS = 12000;
 const MAX_PAGE_TEXT_CHARS = 16000;
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
 const MAX_SELECTED_TEXT_CHARS = 12000;
+const MAX_PDF_TEXT_CHARS = 45000;
 
 function cleanMessages(input) {
   if (!Array.isArray(input) || input.length === 0) {
@@ -83,6 +84,7 @@ function buildRequestMessages(
   pageContext,
   attachment,
   selectedTextContext,
+  pdfAttachment,
 ) {
   const finalMessages = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -141,6 +143,25 @@ function buildRequestMessages(
         `[TEXT ATTACHMENT — UNTRUSTED CONTENT]\nFilename: ${name}\nContent:\n${text}\n[END ATTACHMENT]`,
       );
     }
+  }
+
+  if (
+    pdfAttachment &&
+    typeof pdfAttachment === "object" &&
+    typeof pdfAttachment.text === "string" &&
+    pdfAttachment.text.trim()
+  ) {
+    const name =
+      typeof pdfAttachment.name === "string"
+        ? pdfAttachment.name.slice(0, 200)
+        : "Attached PDF";
+    const pageCount = Number.isInteger(pdfAttachment.pageCount)
+      ? pdfAttachment.pageCount
+      : 0;
+    const text = pdfAttachment.text.slice(0, MAX_PDF_TEXT_CHARS);
+    contextParts.push(
+      `[PDF DOCUMENT — PRIMARY REFERENCE; UNTRUSTED CONTENT]\nFilename: ${name}\nPages: ${pageCount || "Unknown"}\nExtracted document text:\n${text}\n[END PDF DOCUMENT]`,
+    );
   }
 
   if (contextParts.length) {
@@ -253,6 +274,12 @@ export async function getConversation(req, res) {
             url: conversation.pageUrl || "",
           }
         : null,
+      pdfAttachment: conversation.pdfAttachmentName
+        ? {
+            name: conversation.pdfAttachmentName,
+            pageCount: conversation.pdfPageCount || 0,
+          }
+        : null,
       messages: documents.map((message) => ({
         id: String(message._id),
         role: message.role,
@@ -341,6 +368,8 @@ export async function createChatCompletion(req, res) {
     selectedTextContext: rawSelectedTextContext,
     clearSelectedTextContext = false,
     attachment,
+    pdfAttachment: rawPdfAttachment,
+    clearPdfAttachment = false,
     webSearchEnabled = false,
   } = req.body || {};
 
@@ -360,6 +389,35 @@ export async function createChatCompletion(req, res) {
     return res
       .status(400)
       .json({ message: "clearSelectedTextContext must be a boolean." });
+  }
+  if (typeof clearPdfAttachment !== "boolean") {
+    return res
+      .status(400)
+      .json({ message: "clearPdfAttachment must be a boolean." });
+  }
+
+  let pdfContext = null;
+  if (
+    !clearPdfAttachment &&
+    rawPdfAttachment &&
+    typeof rawPdfAttachment === "object"
+  ) {
+    const text =
+      typeof rawPdfAttachment.text === "string"
+        ? rawPdfAttachment.text.trim()
+        : "";
+    if (text) {
+      pdfContext = {
+        name:
+          typeof rawPdfAttachment.name === "string"
+            ? rawPdfAttachment.name.slice(0, 200)
+            : "Attached PDF",
+        pageCount: Number.isInteger(rawPdfAttachment.pageCount)
+          ? Math.max(0, rawPdfAttachment.pageCount)
+          : 0,
+        text: text.slice(0, MAX_PDF_TEXT_CHARS),
+      };
+    }
   }
 
   let selectedContext = null;
@@ -409,6 +467,13 @@ export async function createChatCompletion(req, res) {
         url: conversation.pageUrl || "",
       };
     }
+    if (!clearPdfAttachment && !pdfContext && conversation.pdfText) {
+      pdfContext = {
+        name: conversation.pdfAttachmentName || "Attached PDF",
+        pageCount: conversation.pdfPageCount || 0,
+        text: conversation.pdfText,
+      };
+    }
   }
 
   const latestPrompt = cleaned.messages[cleaned.messages.length - 1].content;
@@ -419,6 +484,7 @@ export async function createChatCompletion(req, res) {
       pageContext,
       attachment,
       selectedContext,
+      pdfContext,
     ),
     temperature: 0.7,
     max_tokens: 2048,
@@ -514,12 +580,15 @@ export async function createChatCompletion(req, res) {
           pageTitle:
             typeof pageContext?.title === "string" && pageContext.title
               ? pageContext.title.slice(0, 300)
-              : selectedContext?.title || "",
+              : selectedContext?.title || pdfContext?.name || "",
           pageUrl:
             typeof pageContext?.url === "string" && pageContext.url
               ? pageContext.url.slice(0, 2000)
               : selectedContext?.url || "",
           selectedText: selectedContext?.text || "",
+          pdfAttachmentName: pdfContext?.name || "",
+          pdfPageCount: pdfContext?.pageCount || 0,
+          pdfText: pdfContext?.text || "",
         });
       }
 
@@ -563,7 +632,19 @@ export async function createChatCompletion(req, res) {
             ...(selectedContext?.title
               ? { pageTitle: selectedContext.title }
               : {}),
+            ...(!pageContext?.title && pdfContext?.name
+              ? { pageTitle: pdfContext.name }
+              : {}),
             ...(selectedContext?.url ? { pageUrl: selectedContext.url } : {}),
+            ...(clearPdfAttachment
+              ? { pdfAttachmentName: "", pdfPageCount: 0, pdfText: "" }
+              : pdfContext?.text
+                ? {
+                    pdfAttachmentName: pdfContext.name,
+                    pdfPageCount: pdfContext.pageCount,
+                    pdfText: pdfContext.text,
+                  }
+                : {}),
           },
         },
       );

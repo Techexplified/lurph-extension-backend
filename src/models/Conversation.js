@@ -47,6 +47,24 @@ const conversationSchema = new mongoose.Schema(
       maxlength: 12000,
       default: "",
     },
+    pdfAttachmentName: {
+      type: String,
+      trim: true,
+      maxlength: 200,
+      default: "",
+    },
+    pdfPageCount: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    // Store extracted text only, never the uploaded PDF binary. This supports
+    // follow-up questions and restoring the document context from chat history.
+    pdfText: {
+      type: String,
+      maxlength: 45000,
+      default: "",
+    },
   },
   {
     timestamps: true,
