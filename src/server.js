@@ -67,7 +67,7 @@ app.use(
     maxAge: 86400,
   }),
 );
-app.use(express.json({ limit: "512kb" }));
+app.use(express.json({ limit: "4mb" }));
 
 app.get("/", (_req, res) => {
   return res.status(200).json({ message: "Lurph backend server is running." });
