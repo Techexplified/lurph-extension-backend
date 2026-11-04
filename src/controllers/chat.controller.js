@@ -22,7 +22,8 @@ Use clear, useful formatting. Be accurate, acknowledge uncertainty, and avoid in
 
 const MAX_HISTORY_MESSAGES = 16;
 const MAX_MESSAGE_CHARS = 12000;
-const MAX_PAGE_TEXT_CHARS = 16000;
+// Keep in sync with the frontend's dedicated full-page summary capture limit.
+const MAX_PAGE_TEXT_CHARS = 60000;
 const MAX_ATTACHMENT_TEXT_CHARS = 20000;
 const MAX_SELECTED_TEXT_CHARS = 12000;
 const MAX_PDF_TEXT_CHARS = 45000;
@@ -208,8 +209,12 @@ function buildRequestMessages(
         ? pageContext.text.slice(0, MAX_PAGE_TEXT_CHARS)
         : "";
     if (title || url || text) {
+      const captureNotice =
+        pageContext.truncated === true
+          ? `\nCapture notice: The source page contains more readable text than the capture limit. Only the first ${text.length.toLocaleString()} characters are included; do not imply that omitted content was reviewed.`
+          : "";
       contextParts.push(
-        `[CURRENT WEBPAGE REFERENCE — UNTRUSTED CONTENT]\nTitle: ${title || "Unknown"}\nURL: ${url || "Unknown"}\nPage text:\n${text || "(No readable page text was available.)"}\n[END WEBPAGE REFERENCE]`,
+        `[CURRENT WEBPAGE REFERENCE — UNTRUSTED CONTENT]\nTitle: ${title || "Unknown"}\nURL: ${url || "Unknown"}\nPage text:\n${text || "(No readable page text was available.)"}${captureNotice}\n[END WEBPAGE REFERENCE]`,
       );
     }
   }
