@@ -1,22 +1,22 @@
-import mongoose from 'mongoose'
+import mongoose from "mongoose";
 
 const chatMessageSchema = new mongoose.Schema(
   {
     conversation: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Conversation',
+      ref: "Conversation",
       required: true,
       index: true,
     },
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: "User",
       required: true,
       index: true,
     },
     role: {
       type: String,
-      enum: ['user', 'assistant'],
+      enum: ["user", "assistant"],
       required: true,
     },
     content: {
@@ -26,20 +26,35 @@ const chatMessageSchema = new mongoose.Schema(
     },
     model: {
       type: String,
-      default: '',
+      default: "",
     },
     providerModel: {
       type: String,
-      default: '',
+      default: "",
+    },
+    tool: {
+      type: String,
+      enum: ["", "email-draft", "translate"],
+      default: "",
+    },
+    translationFrom: {
+      type: String,
+      maxlength: 60,
+      default: "",
+    },
+    translationTo: {
+      type: String,
+      maxlength: 60,
+      default: "",
     },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },
     versionKey: false,
   },
-)
+);
 
-chatMessageSchema.index({ conversation: 1, createdAt: 1 })
-chatMessageSchema.index({ user: 1, createdAt: -1 })
+chatMessageSchema.index({ conversation: 1, createdAt: 1 });
+chatMessageSchema.index({ user: 1, createdAt: -1 });
 
-export const ChatMessage = mongoose.model('ChatMessage', chatMessageSchema)
+export const ChatMessage = mongoose.model("ChatMessage", chatMessageSchema);
