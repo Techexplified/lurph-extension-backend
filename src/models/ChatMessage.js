@@ -34,7 +34,15 @@ const chatMessageSchema = new mongoose.Schema(
     },
     tool: {
       type: String,
-      enum: ["", "email-draft", "translate"],
+      enum: [
+        "",
+        "email-draft",
+        "translate",
+        "rewrite",
+        "image-analysis",
+        "pdf-qa",
+        "summarize-page",
+      ],
       default: "",
     },
     translationFrom: {

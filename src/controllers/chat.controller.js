@@ -563,14 +563,23 @@ export async function createChatCompletion(req, res) {
     }
     translation = { fromLanguage, toLanguage };
   }
-  // Persist only known tool markers used by the extension UI.
-  const tool =
-    rawTool === "email-draft"
-      ? "email-draft"
-      : rawTool === "translate" && translation
-        ? "translate"
-        : "";
-  if (rawTool === "translate" && !translation) {
+  // Persist only known tool markers so the chat UI can label each tool's
+  // source/request and generated result, including when history is reopened.
+  const supportedToolMarkers = new Set([
+    "email-draft",
+    "translate",
+    "rewrite",
+    "image-analysis",
+    "pdf-qa",
+    "summarize-page",
+  ]);
+  if (rawTool && !supportedToolMarkers.has(rawTool)) {
+    return res
+      .status(400)
+      .json({ message: "The selected tool is not supported." });
+  }
+  const tool = rawTool && supportedToolMarkers.has(rawTool) ? rawTool : "";
+  if (tool === "translate" && !translation) {
     return res
       .status(400)
       .json({
