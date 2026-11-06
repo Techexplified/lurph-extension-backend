@@ -55,6 +55,11 @@ const chatMessageSchema = new mongoose.Schema(
       maxlength: 60,
       default: "",
     },
+    rewriteTone: {
+      type: String,
+      maxlength: 40,
+      default: "",
+    },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },
