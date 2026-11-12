@@ -4,6 +4,7 @@ import multer from "multer";
 import { authenticate } from "../middleware/authenticate.js";
 import {
   createChatCompletion,
+  getChatUsage,
   deleteConversation,
   getConversation,
   listConversations,
@@ -35,6 +36,7 @@ router.post(
   pdfUpload.single("pdf"),
   extractPdf,
 );
+router.get("/usage", getChatUsage);
 router.post("/completions", chatRateLimiter, createChatCompletion);
 router.get("/conversations", listConversations);
 router.get("/conversations/:id", getConversation);

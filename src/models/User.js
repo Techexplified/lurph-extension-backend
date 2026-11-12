@@ -30,6 +30,12 @@ const userSchema = new mongoose.Schema(
       sparse: true,
       trim: true,
     },
+    // Number of successfully generated AI queries used on the free tier.
+    freeQueriesUsed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,
