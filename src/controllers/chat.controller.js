@@ -5,8 +5,9 @@ import { ChatMessage } from "../models/ChatMessage.js";
 const MODEL_MAP = {
   "gpt-4o": process.env.OPENROUTER_MODEL_GPT4O || "openai/gpt-4o",
   "claude-sonnet":
-    process.env.OPENROUTER_MODEL_CLAUDE || "anthropic/claude-sonnet",
-  "gemini-flash": process.env.OPENROUTER_MODEL_GEMINI || "google/gemini-flash",
+    process.env.OPENROUTER_MODEL_CLAUDE || "anthropic/claude-sonnet-5.5",
+  "gemini-flash":
+    process.env.OPENROUTER_MODEL_GEMINI || "google/gemini-3.8-flash",
   "llama-3.3":
     process.env.OPENROUTER_MODEL_LLAMA || "meta-llama/llama-3.3-70b-instruct",
   "deepseek-v3":
@@ -468,12 +469,9 @@ export async function renameConversation(req, res) {
   if (!validConversationId(id))
     return res.status(400).json({ message: "Invalid conversation ID." });
   if (!title || title.length > 120) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "Conversation title must contain between 1 and 120 characters.",
-      });
+    return res.status(400).json({
+      message: "Conversation title must contain between 1 and 120 characters.",
+    });
   }
 
   const conversation = await Conversation.findOneAndUpdate(
@@ -512,12 +510,10 @@ export async function deleteConversation(req, res) {
 
   await ChatMessage.deleteMany({ conversation: id, user: req.auth.userId });
   await Conversation.deleteOne({ _id: id, user: req.auth.userId });
-  return res
-    .status(200)
-    .json({
-      message: "Conversation deleted successfully.",
-      conversationId: id,
-    });
+  return res.status(200).json({
+    message: "Conversation deleted successfully.",
+    conversationId: id,
+  });
 }
 
 export async function createChatCompletion(req, res) {
@@ -612,11 +608,9 @@ export async function createChatCompletion(req, res) {
   }
   const tool = rawTool && supportedToolMarkers.has(rawTool) ? rawTool : "";
   if (tool === "translate" && !translation) {
-    return res
-      .status(400)
-      .json({
-        message: "Choose source and target languages before translating.",
-      });
+    return res.status(400).json({
+      message: "Choose source and target languages before translating.",
+    });
   }
   if (tool === "rewrite" && !rewrite) {
     return res
@@ -624,11 +618,9 @@ export async function createChatCompletion(req, res) {
       .json({ message: "Choose a rewrite tone before rewriting." });
   }
   if (rewrite && tool !== "rewrite") {
-    return res
-      .status(400)
-      .json({
-        message: "Rewrite settings can only be used with the Rewrite tool.",
-      });
+    return res.status(400).json({
+      message: "Rewrite settings can only be used with the Rewrite tool.",
+    });
   }
   if (typeof clearSelectedTextContext !== "boolean") {
     return res
@@ -769,53 +761,41 @@ export async function createChatCompletion(req, res) {
         `OpenRouter request failed (${response.status}): ${providerMessage || "No provider message"}`,
       );
       if (response.status === 401) {
-        return res
-          .status(503)
-          .json({
-            message:
-              "OpenRouter rejected the API key. Check OPENROUTER_API_KEY in your backend environment.",
-          });
+        return res.status(503).json({
+          message:
+            "OpenRouter rejected the API key. Check OPENROUTER_API_KEY in your backend environment.",
+        });
       }
       if (response.status === 402) {
-        return res
-          .status(402)
-          .json({
-            message:
-              "Your OpenRouter account has insufficient credits or has reached a billing limit.",
-          });
+        return res.status(402).json({
+          message:
+            "Your OpenRouter account has insufficient credits or has reached a billing limit.",
+        });
       }
       if (response.status === 429) {
-        return res
-          .status(429)
-          .json({
-            message:
-              "OpenRouter is rate limiting requests. Please wait a moment and try again.",
-          });
+        return res.status(429).json({
+          message:
+            "OpenRouter is rate limiting requests. Please wait a moment and try again.",
+        });
       }
       if (
         imageContext &&
         /image|vision|multimodal|modality/i.test(providerMessage)
       ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "The selected model does not support image input. Choose a vision-capable model such as GPT-4o, Claude, or Gemini.",
-          });
+        return res.status(400).json({
+          message:
+            "The selected model does not support image input. Choose a vision-capable model such as GPT-4o, Claude, or Gemini.",
+        });
       }
       if (response.status === 404) {
-        return res
-          .status(502)
-          .json({
-            message: `The selected OpenRouter model is unavailable (${MODEL_MAP[model]}). Update its model ID in the backend environment.`,
-          });
-      }
-      return res
-        .status(502)
-        .json({
-          message:
-            "OpenRouter could not complete the request. Please try again or choose another model.",
+        return res.status(502).json({
+          message: `The selected OpenRouter model is unavailable (${MODEL_MAP[model]}). Update its model ID in the backend environment.`,
         });
+      }
+      return res.status(502).json({
+        message:
+          "OpenRouter could not complete the request. Please try again or choose another model.",
+      });
     }
 
     const reply = extractText(result?.choices?.[0]?.message?.content);
@@ -823,12 +803,10 @@ export async function createChatCompletion(req, res) {
       console.error(
         "OpenRouter returned an empty or unsupported message payload.",
       );
-      return res
-        .status(502)
-        .json({
-          message:
-            "The selected model returned an empty response. Please try again.",
-        });
+      return res.status(502).json({
+        message:
+          "The selected model returned an empty response. Please try again.",
+      });
     }
 
     let savedConversation = conversation;
