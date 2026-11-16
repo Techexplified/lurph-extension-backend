@@ -3,17 +3,51 @@ import { Conversation } from "../models/Conversation.js";
 import { ChatMessage } from "../models/ChatMessage.js";
 import { User } from "../models/User.js";
 
+const OPENROUTER_FREE_ROUTER = "openrouter/free";
+
+const FREE_MODELS = Object.freeze({
+  "auto-free": OPENROUTER_FREE_ROUTER,
+  "nemotron-ultra-free": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "ernie-flash-free": "baidu/ernie-5.5-flash-preview:free",
+  "nemotron-lightning-free": "nvidia/nemotron-3.5-lightning:free",
+  "nemotron-super-vl-free": "nvidia/nemotron-3.5-super-vl:free",
+  "ling-flash-free": "inclusionai/ling-3.2-flash:free",
+  "inkling-small-free": "thinkingmachines/inkling-2-small:free",
+});
+
+// Keep older installed extension versions working, but route their previous
+// paid model keys to the free router rather than charging the OpenRouter account.
+const LEGACY_MODEL_KEYS = [
+  "gpt-4o",
+  "claude-sonnet",
+  "gemini-flash",
+  "llama-3.3",
+  "deepseek-v3",
+];
+
 const MODEL_MAP = {
-  "gpt-4o": process.env.OPENROUTER_MODEL_GPT4O || "openai/gpt-4o",
-  "claude-sonnet":
-    process.env.OPENROUTER_MODEL_CLAUDE || "anthropic/claude-sonnet-5.5",
-  "gemini-flash":
-    process.env.OPENROUTER_MODEL_GEMINI || "google/gemini-3.8-flash",
-  "llama-3.3":
-    process.env.OPENROUTER_MODEL_LLAMA || "meta-llama/llama-3.3-70b-instruct",
-  "deepseek-v3":
-    process.env.OPENROUTER_MODEL_DEEPSEEK || "deepseek/deepseek-chat",
+  ...FREE_MODELS,
+  ...Object.fromEntries(
+    LEGACY_MODEL_KEYS.map((legacyKey) => [legacyKey, OPENROUTER_FREE_ROUTER]),
+  ),
 };
+
+const FREE_TEXT_FALLBACKS = [
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "baidu/ernie-5.5-flash-preview:free",
+  "nvidia/nemotron-3.5-lightning:free",
+];
+
+const FREE_VISION_FALLBACKS = [
+  "nvidia/nemotron-3.5-super-vl:free",
+  "inclusionai/ling-3.2-flash:free",
+  "thinkingmachines/inkling-2-small:free",
+];
+
+const FREE_VISION_MODEL_IDS = new Set(FREE_VISION_FALLBACKS);
+const OPENROUTER_CHAT_COMPLETIONS_URL =
+  "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_ATTEMPT_TIMEOUT_MS = 20_000;
 
 const SYSTEM_PROMPT = `You are Lurph, a helpful AI assistant inside a Chrome extension.
 Help the user with questions, explanations, writing, rewriting, summaries, analysis, and research.
@@ -389,9 +423,11 @@ export async function getChatUsage(req, res) {
   const user = await User.findById(req.auth.userId)
     .select("freeQueriesUsed")
     .lean();
+
   if (!user) {
     return res.status(401).json({ message: "User account no longer exists." });
   }
+
   return res.status(200).json({
     queryUsage: formatFreeQueryUsage(user.freeQueriesUsed),
   });
@@ -559,6 +595,135 @@ export async function deleteConversation(req, res) {
   });
 }
 
+function getFreeModelAttempts(selectedModelKey, hasImage) {
+  const selectedModelId = MODEL_MAP[selectedModelKey] || OPENROUTER_FREE_ROUTER;
+  const fallbacks = hasImage ? FREE_VISION_FALLBACKS : FREE_TEXT_FALLBACKS;
+  const attempts = [];
+
+  // A text-only model is skipped when the request includes an image. The free
+  // router filters for image-capable models, followed by known free vision models.
+  if (!hasImage || FREE_VISION_MODEL_IDS.has(selectedModelId)) {
+    attempts.push(selectedModelId);
+  }
+
+  if (selectedModelId !== OPENROUTER_FREE_ROUTER) {
+    attempts.push(OPENROUTER_FREE_ROUTER);
+  }
+  attempts.push(...fallbacks);
+
+  return [...new Set(attempts)];
+}
+
+function shouldTryNextFreeModel(status, providerMessage = "") {
+  if (status === 401 || status === 403 || status === 413 || status === 422) {
+    return false;
+  }
+
+  if ([402, 404, 408, 409, 425, 429, 500, 502, 503, 504].includes(status)) {
+    return true;
+  }
+
+  // Some providers return HTTP 400 for model-specific capability mismatches.
+  return (
+    status === 400 &&
+    /tool|image|vision|modalit|unsupported|not supported|no endpoint|no provider/i.test(
+      providerMessage,
+    )
+  );
+}
+
+async function requestOpenRouterWithFallback({
+  payload,
+  apiKey,
+  selectedModelKey,
+  hasImage,
+}) {
+  const modelAttempts = getFreeModelAttempts(selectedModelKey, hasImage);
+  let lastError = null;
+
+  for (let index = 0; index < modelAttempts.length; index += 1) {
+    const modelId = modelAttempts[index];
+    try {
+      const response = await fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "X-OpenRouter-Title": "Lurph AI",
+          ...(process.env.OPENROUTER_HTTP_REFERER
+            ? { "HTTP-Referer": process.env.OPENROUTER_HTTP_REFERER }
+            : {}),
+        },
+        body: JSON.stringify({ ...payload, model: modelId }),
+        signal: AbortSignal.timeout(OPENROUTER_ATTEMPT_TIMEOUT_MS),
+      });
+
+      const result = await response.json().catch(() => null);
+      if (response.ok) {
+        const reply = extractText(result?.choices?.[0]?.message?.content);
+        if (reply) {
+          return {
+            ok: true,
+            result,
+            reply,
+            providerModel: result?.model || modelId,
+            requestedProviderModel: modelId,
+          };
+        }
+
+        lastError = {
+          status: 502,
+          message: "The model returned an empty response.",
+          modelId,
+        };
+        console.warn(`OpenRouter model ${modelId} returned an empty response.`);
+        continue;
+      }
+
+      const providerMessage = result?.error?.message || "";
+      lastError = {
+        status: response.status,
+        message: providerMessage,
+        modelId,
+      };
+      console.warn(
+        `OpenRouter model ${modelId} failed (${response.status}): ${providerMessage || "No provider message"}`,
+      );
+
+      if (
+        response.status === 401 ||
+        !shouldTryNextFreeModel(response.status, providerMessage) ||
+        index === modelAttempts.length - 1
+      ) {
+        break;
+      }
+    } catch (error) {
+      lastError = {
+        status:
+          error?.name === "TimeoutError" || error?.name === "AbortError"
+            ? 504
+            : 502,
+        message: error?.message || "Unable to contact OpenRouter.",
+        modelId,
+      };
+      console.warn(
+        `OpenRouter model ${modelId} request error:`,
+        error?.message || error,
+      );
+
+      if (index === modelAttempts.length - 1) break;
+    }
+  }
+
+  return {
+    ok: false,
+    error: lastError || {
+      status: 502,
+      message: "No free model was available.",
+    },
+  };
+}
+
 export async function createChatCompletion(req, res) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -569,7 +734,7 @@ export async function createChatCompletion(req, res) {
   }
 
   const {
-    model = "gpt-4o",
+    model = "auto-free",
     messages: rawMessages,
     conversationId: requestedConversationId = null,
     pageContext,
@@ -763,7 +928,6 @@ export async function createChatCompletion(req, res) {
 
   const latestPrompt = cleaned.messages[cleaned.messages.length - 1].content;
   const payload = {
-    model: MODEL_MAP[model],
     messages: buildRequestMessages(
       cleaned.messages,
       pageContext,
@@ -779,9 +943,8 @@ export async function createChatCompletion(req, res) {
   };
   if (webSearchEnabled) payload.tools = [{ type: "openrouter:web_search" }];
 
-  // Reserve a free query atomically so concurrent requests or multiple
-  // extension installs cannot exceed the account's five-query allowance.
-  // Older user records without this field are treated as having used zero.
+  // Atomically reserve one of the user's five free queries. A reservation is
+  // released if every free model fails, so only successful AI responses count.
   const reservedUser = await User.findOneAndUpdate(
     {
       _id: req.auth.userId,
@@ -803,238 +966,201 @@ export async function createChatCompletion(req, res) {
     });
   }
 
-  let queryReservationPending = true;
-
+  let completion;
   try {
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
+    completion = await requestOpenRouterWithFallback({
+      payload,
+      apiKey,
+      selectedModelKey: model,
+      hasImage: Boolean(imageContext),
+    });
+  } catch (error) {
+    await releaseFreeQueryReservation(req.auth.userId);
+    throw error;
+  }
+
+  if (!completion.ok) {
+    await releaseFreeQueryReservation(req.auth.userId);
+    const { status: providerStatus, message: providerMessage = "" } =
+      completion.error;
+
+    if (providerStatus === 401) {
+      return res.status(503).json({
+        message:
+          "OpenRouter rejected the API key. Check OPENROUTER_API_KEY in your backend environment.",
+      });
+    }
+    if (providerStatus === 402) {
+      return res.status(402).json({
+        message:
+          "OpenRouter could not serve the free-model request. Free models have no token charge, but an account-level billing restriction or negative balance may still block requests.",
+      });
+    }
+    if (providerStatus === 429) {
+      return res.status(429).json({
+        message:
+          "The free models are busy or your OpenRouter free-tier request limit has been reached. Please wait and try again later.",
+      });
+    }
+    if (providerStatus === 504) {
+      return res.status(504).json({
+        message:
+          "The available free models took too long to respond. Please try again.",
+      });
+    }
+    if (
+      imageContext &&
+      /image|vision|multimodal|modality/i.test(providerMessage)
+    ) {
+      return res.status(400).json({
+        message:
+          "No available free vision model could process this image right now. Try again or upload a smaller image.",
+      });
+    }
+
+    return res.status(502).json({
+      message:
+        "The available free AI models could not complete this request. Please try again in a moment.",
+    });
+  }
+
+  const { result, reply, providerModel, requestedProviderModel } = completion;
+
+  let savedConversation = conversation;
+  let historySaved = false;
+  try {
+    if (!savedConversation) {
+      savedConversation = await Conversation.create({
+        user: req.auth.userId,
+        title: makeConversationTitle(latestPrompt),
+        lastPromptPreview: latestPrompt.slice(0, 300),
+        lastMessageAt: new Date(),
+        lastModel: model,
+        pageTitle:
+          typeof pageContext?.title === "string" && pageContext.title
+            ? pageContext.title.slice(0, 300)
+            : selectedContext?.title ||
+              pdfContext?.name ||
+              imageContext?.name ||
+              "",
+        pageUrl:
+          typeof pageContext?.url === "string" && pageContext.url
+            ? pageContext.url.slice(0, 2000)
+            : selectedContext?.url || "",
+        selectedText: selectedContext?.text || "",
+        pdfAttachmentName: pdfContext?.name || "",
+        pdfPageCount: pdfContext?.pageCount || 0,
+        pdfText: pdfContext?.text || "",
+      });
+    }
+
+    await ChatMessage.insertMany([
       {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "X-OpenRouter-Title": "Lurph AI",
-          ...(process.env.OPENROUTER_HTTP_REFERER
-            ? { "HTTP-Referer": process.env.OPENROUTER_HTTP_REFERER }
-            : {}),
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(90000),
+        conversation: savedConversation._id,
+        user: req.auth.userId,
+        role: "user",
+        content: latestPrompt,
+        model,
+        providerModel: providerModel || requestedProviderModel,
+        tool,
+        translationFrom: translation?.fromLanguage || "",
+        translationTo: translation?.toLanguage || "",
+        rewriteTone: rewrite?.tone || "",
       },
-    );
+      {
+        conversation: savedConversation._id,
+        user: req.auth.userId,
+        role: "assistant",
+        content: reply,
+        model,
+        providerModel: providerModel || requestedProviderModel,
+        tool,
+        translationFrom: translation?.fromLanguage || "",
+        translationTo: translation?.toLanguage || "",
+        rewriteTone: rewrite?.tone || "",
+      },
+    ]);
 
-    const result = await response.json().catch(() => null);
-    if (!response.ok) {
-      await releaseFreeQueryReservation(req.auth.userId);
-      queryReservationPending = false;
-      const providerMessage = result?.error?.message || "";
-      console.error(
-        `OpenRouter request failed (${response.status}): ${providerMessage || "No provider message"}`,
-      );
-      if (response.status === 401) {
-        return res.status(503).json({
-          message:
-            "OpenRouter rejected the API key. Check OPENROUTER_API_KEY in your backend environment.",
-        });
-      }
-      if (response.status === 402) {
-        return res.status(402).json({
-          message:
-            "Your OpenRouter account has insufficient credits or has reached a billing limit.",
-        });
-      }
-      if (response.status === 429) {
-        return res.status(429).json({
-          message:
-            "OpenRouter is rate limiting requests. Please wait a moment and try again.",
-        });
-      }
-      if (
-        imageContext &&
-        /image|vision|multimodal|modality/i.test(providerMessage)
-      ) {
-        return res.status(400).json({
-          message:
-            "The selected model does not support image input. Choose a vision-capable model such as GPT-4o, Claude, or Gemini.",
-        });
-      }
-      if (response.status === 404) {
-        return res.status(502).json({
-          message: `The selected OpenRouter model is unavailable (${MODEL_MAP[model]}). Update its model ID in the backend environment.`,
-        });
-      }
-      return res.status(502).json({
-        message:
-          "OpenRouter could not complete the request. Please try again or choose another model.",
-      });
-    }
-
-    const reply = extractText(result?.choices?.[0]?.message?.content);
-    if (!reply) {
-      await releaseFreeQueryReservation(req.auth.userId);
-      queryReservationPending = false;
-      console.error(
-        "OpenRouter returned an empty or unsupported message payload.",
-      );
-      return res.status(502).json({
-        message:
-          "The selected model returned an empty response. Please try again.",
-      });
-    }
-
-    // The AI response was generated successfully, so this query is consumed.
-    queryReservationPending = false;
-    let savedConversation = conversation;
-    let historySaved = false;
-    try {
-      if (!savedConversation) {
-        savedConversation = await Conversation.create({
-          user: req.auth.userId,
-          title: makeConversationTitle(latestPrompt),
+    await Conversation.updateOne(
+      { _id: savedConversation._id, user: req.auth.userId },
+      {
+        $set: {
           lastPromptPreview: latestPrompt.slice(0, 300),
           lastMessageAt: new Date(),
           lastModel: model,
-          pageTitle:
-            typeof pageContext?.title === "string" && pageContext.title
-              ? pageContext.title.slice(0, 300)
-              : selectedContext?.title ||
-                pdfContext?.name ||
-                imageContext?.name ||
-                "",
-          pageUrl:
-            typeof pageContext?.url === "string" && pageContext.url
-              ? pageContext.url.slice(0, 2000)
-              : selectedContext?.url || "",
-          selectedText: selectedContext?.text || "",
-          pdfAttachmentName: pdfContext?.name || "",
-          pdfPageCount: pdfContext?.pageCount || 0,
-          pdfText: pdfContext?.text || "",
-        });
-      }
-
-      await ChatMessage.insertMany([
-        {
-          conversation: savedConversation._id,
-          user: req.auth.userId,
-          role: "user",
-          content: latestPrompt,
-          model,
-          providerModel: MODEL_MAP[model],
-          tool,
-          translationFrom: translation?.fromLanguage || "",
-          translationTo: translation?.toLanguage || "",
-          rewriteTone: rewrite?.tone || "",
+          ...(typeof pageContext?.title === "string"
+            ? { pageTitle: pageContext.title.slice(0, 300) }
+            : {}),
+          ...(typeof pageContext?.url === "string"
+            ? { pageUrl: pageContext.url.slice(0, 2000) }
+            : {}),
+          ...(clearSelectedTextContext
+            ? { selectedText: "" }
+            : selectedContext?.text
+              ? { selectedText: selectedContext.text }
+              : {}),
+          ...(selectedContext?.title
+            ? { pageTitle: selectedContext.title }
+            : {}),
+          ...(!pageContext?.title && pdfContext?.name
+            ? { pageTitle: pdfContext.name }
+            : {}),
+          ...(!pageContext?.title && !pdfContext?.name && imageContext?.name
+            ? { pageTitle: imageContext.name }
+            : {}),
+          ...(selectedContext?.url ? { pageUrl: selectedContext.url } : {}),
+          ...(clearPdfAttachment
+            ? { pdfAttachmentName: "", pdfPageCount: 0, pdfText: "" }
+            : pdfContext?.text
+              ? {
+                  pdfAttachmentName: pdfContext.name,
+                  pdfPageCount: pdfContext.pageCount,
+                  pdfText: pdfContext.text,
+                }
+              : {}),
         },
-        {
-          conversation: savedConversation._id,
-          user: req.auth.userId,
-          role: "assistant",
-          content: reply,
-          model,
-          providerModel: result.model || MODEL_MAP[model],
-          tool,
-          translationFrom: translation?.fromLanguage || "",
-          translationTo: translation?.toLanguage || "",
-          rewriteTone: rewrite?.tone || "",
-        },
-      ]);
-
-      await Conversation.updateOne(
-        { _id: savedConversation._id, user: req.auth.userId },
-        {
-          $set: {
-            lastPromptPreview: latestPrompt.slice(0, 300),
-            lastMessageAt: new Date(),
-            lastModel: model,
-            ...(typeof pageContext?.title === "string"
-              ? { pageTitle: pageContext.title.slice(0, 300) }
-              : {}),
-            ...(typeof pageContext?.url === "string"
-              ? { pageUrl: pageContext.url.slice(0, 2000) }
-              : {}),
-            ...(clearSelectedTextContext
-              ? { selectedText: "" }
-              : selectedContext?.text
-                ? { selectedText: selectedContext.text }
-                : {}),
-            ...(selectedContext?.title
-              ? { pageTitle: selectedContext.title }
-              : {}),
-            ...(!pageContext?.title && pdfContext?.name
-              ? { pageTitle: pdfContext.name }
-              : {}),
-            ...(!pageContext?.title && !pdfContext?.name && imageContext?.name
-              ? { pageTitle: imageContext.name }
-              : {}),
-            ...(selectedContext?.url ? { pageUrl: selectedContext.url } : {}),
-            ...(clearPdfAttachment
-              ? { pdfAttachmentName: "", pdfPageCount: 0, pdfText: "" }
-              : pdfContext?.text
-                ? {
-                    pdfAttachmentName: pdfContext.name,
-                    pdfPageCount: pdfContext.pageCount,
-                    pdfText: pdfContext.text,
-                  }
-                : {}),
-          },
-        },
-      );
-      historySaved = true;
-    } catch (saveError) {
-      console.error(
-        "Could not persist chat history:",
-        saveError?.message || saveError,
-      );
-      if (savedConversation && !conversation) {
-        await ChatMessage.deleteMany({
-          conversation: savedConversation._id,
-          user: req.auth.userId,
-        }).catch(() => {});
-        await Conversation.deleteOne({
-          _id: savedConversation._id,
-          user: req.auth.userId,
-        }).catch(() => {});
-      }
+      },
+    );
+    historySaved = true;
+  } catch (saveError) {
+    console.error(
+      "Could not persist chat history:",
+      saveError?.message || saveError,
+    );
+    if (savedConversation && !conversation) {
+      await ChatMessage.deleteMany({
+        conversation: savedConversation._id,
+        user: req.auth.userId,
+      }).catch(() => {});
+      await Conversation.deleteOne({
+        _id: savedConversation._id,
+        user: req.auth.userId,
+      }).catch(() => {});
     }
-
-    let queryUsage = formatFreeQueryUsage(reservedUser.freeQueriesUsed);
-    try {
-      queryUsage = await readFreeQueryUsage(req.auth.userId);
-    } catch {
-      // The AI response is already ready; retain the reservation snapshot if
-      // the optional usage refresh is temporarily unavailable.
-    }
-
-    return res.status(200).json({
-      reply,
-      queryUsage,
-      model,
-      tool,
-      providerModel: result.model || MODEL_MAP[model],
-      usage: result.usage || null,
-      conversationId: savedConversation ? String(savedConversation._id) : null,
-      historySaved,
-      ...(imageContext ? { imageAttachmentStored: false } : {}),
-      ...(historySaved
-        ? {}
-        : {
-            historyWarning:
-              "Your response was generated, but this conversation could not be saved to history.",
-          }),
-    });
-  } catch (error) {
-    if (queryReservationPending) {
-      await releaseFreeQueryReservation(req.auth.userId);
-      queryReservationPending = false;
-    }
-    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
-      return res
-        .status(504)
-        .json({ message: "The AI request timed out. Please try again." });
-    }
-    console.error("OpenRouter request error:", error?.message || error);
-    return res
-      .status(502)
-      .json({ message: "Unable to contact OpenRouter. Please try again." });
   }
+
+  let queryUsage = formatFreeQueryUsage(reservedUser.freeQueriesUsed);
+  try {
+    queryUsage = await readFreeQueryUsage(req.auth.userId);
+  } catch {
+    // Keep the atomic reservation snapshot if the optional refresh fails.
+  }
+
+  return res.status(200).json({
+    reply,
+    queryUsage,
+    model,
+    tool,
+    providerModel: providerModel || requestedProviderModel,
+    usage: result.usage || null,
+    conversationId: savedConversation ? String(savedConversation._id) : null,
+    historySaved,
+    ...(imageContext ? { imageAttachmentStored: false } : {}),
+    ...(historySaved
+      ? {}
+      : {
+          historyWarning:
+            "Your response was generated, but this conversation could not be saved to history.",
+        }),
+  });
 }
